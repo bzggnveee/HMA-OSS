@@ -1,59 +1,73 @@
 name: Pull Request
 
-on:
-  pull_request:
-  workflow_dispatch:
+on: pull_request
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest ]
+    if: ${{ !startsWith(github.event.head_commit.message, 'docs:') }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: 'recursive'
           fetch-depth: 0
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 21
+      - name: Gradle wrapper validation
+        uses: gradle/wrapper-validation-action@v3
 
-      - uses: actions/cache@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Prepare env
+        run: |
+          touch local.properties
+          mkdir -p ~/.config/.android
+          ln -s ~/.config/.android ~/.android
+
+      - name: Cache gradle
+        uses: actions/cache@v4
         with:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-            ~/.m2/repository
-          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*') }}
+            ~/.config/.android/debug.keystore
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+          restore-keys: ${{ runner.os }}-gradle-
 
-      - name: Prepare
+      - name: Gradle prebuild
         run: |
-          touch local.properties
-          echo "org.gradle.jvmargs=-Xmx4g" >> gradle.properties
+          echo 'org.gradle.jvmargs=-Xmx2048m' >> gradle.properties
+          ./gradlew prebuild
 
-      - name: Build MaterialThemeBuilder
+      - name: Create debug keystore
         run: |
-          git clone --depth=1 --recurse-submodules \
-            https://github.com/LSPosed/MaterialThemeBuilder \
-            -b agp9.0 ~/MaterialThemeBuilder
+          if [ ! -f ~/.config/.android/debug.keystore ]
+          then
+            keytool -genkey -v -keystore ~/.config/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          fi
 
-          cd ~/MaterialThemeBuilder
-          chmod +x gradlew
-          ./gradlew -x test publishToMavenLocal
-
-      - name: Prebuild
-        run: ./gradlew prebuild
-
-      - name: Build Release
+      - name: Build release
+        id: buildRelease
         run: |
           ./gradlew :app:assembleRelease
           ./gradlew :zygote:assembleRelease
+          echo "releaseZIPName=$(ls zygote/build/outputs/magisk/release/*.zip | awk -F '(/|.zip)' '{print $6}')" >> $GITHUB_OUTPUT
 
-      - name: Upload Release
-        uses: actions/upload-artifact@v4
+      - name: Upload release ZIP
+        if: success()
+        uses: actions/upload-artifact@v7
         with:
-          name: release
+          archive: false
+          name: ${{ steps.buildRelease.outputs.releaseZIPName }}
           path: |
-            app/build/outputs/apk/release/*.apk
             zygote/build/outputs/magisk/release/*.zip

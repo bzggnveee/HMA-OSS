@@ -1,22 +1,20 @@
-name: Pull Request
+name: Release Build
 
-on: pull_request
+on:
+  pull_request:
+  workflow_dispatch:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ ubuntu-latest ]
-    if: ${{ !startsWith(github.event.head_commit.message, 'docs:') }}
+    runs-on: ubuntu-latest
+
+    if: ${{ github.event_name == 'workflow_dispatch' || !startsWith(github.event.head_commit.message, 'docs:') }}
 
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
+          submodules: recursive
           fetch-depth: 0
 
       - name: Gradle wrapper validation
@@ -51,23 +49,27 @@ jobs:
 
       - name: Create debug keystore
         run: |
-          if [ ! -f ~/.config/.android/debug.keystore ]
-          then
-            keytool -genkey -v -keystore ~/.config/.android/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          if [ ! -f ~/.config/.android/debug.keystore ]; then
+            keytool -genkey -v \
+              -keystore ~/.config/.android/debug.keystore \
+              -alias androiddebugkey \
+              -storepass android \
+              -keypass android \
+              -keyalg RSA \
+              -keysize 2048 \
+              -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Build debug
-        id: buildDebug
+      - name: Build release
+        id: buildRelease
         run: |
-          ./gradlew :app:assembleDebug
-          ./gradlew :zygote:assembleDebug
-          echo "debugZIPName=$(ls zygote/build/outputs/magisk/debug/*.zip | awk -F '(/|.zip)' '{print $6}')" >> $GITHUB_OUTPUT
+          ./gradlew :app:assembleRelease
+          ./gradlew :zygote:assembleRelease
+          echo "zipName=$(basename zygote/build/outputs/magisk/release/*.zip .zip)" >> $GITHUB_OUTPUT
 
-      - name: Upload debug ZIP
-        if: success()
-        uses: actions/upload-artifact@v7
+      - name: Upload release ZIP
+        uses: actions/upload-artifact@v4
         with:
-          archive: false
-          name: ${{ steps.buildDebug.outputs.debugZIPName }}
-          path: |
-            zygote/build/outputs/magisk/debug/*.zip
+          name: ${{ steps.buildRelease.outputs.zipName }}
+          path: zygote/build/outputs/magisk/release/*.zip
